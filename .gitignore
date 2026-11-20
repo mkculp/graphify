@@ -27,6 +27,12 @@ skills/
 # A global "core" ignore (for core dumps) would otherwise drop them.
 !tools/skillgen/fragments/core/
 !tools/skillgen/fragments/core/**
+# The crew plugin (plugins/crew) is hand-written source, not an install target.
+!plugins/crew/skills/
+!plugins/crew/skills/**
+# ...but never its bytecode: the re-include above would otherwise override __pycache__/.
+plugins/crew/**/__pycache__/
+plugins/crew/**/*.pyc
 docs/superpowers/
 .vscode/
 .kilo
