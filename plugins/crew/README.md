@@ -14,10 +14,10 @@ Requirements: git, and `python3` 3.9 or later on `PATH`. graphify is optional; w
 /plugin install crew --marketplace mkculp/graphify
 ```
 
-Until this is merged to the default branch, add the branch explicitly:
+On a Claude Code version older than 2.1.275, add the marketplace first:
 
 ```
-/plugin marketplace add mkculp/graphify#claude/jolly-franklin-j2visf
+/plugin marketplace add mkculp/graphify
 /plugin install crew@mkculp
 ```
 
