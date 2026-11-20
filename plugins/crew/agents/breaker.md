@@ -27,7 +27,7 @@ If the issue needs no new file because an existing command already fails on the 
 ## Rules
 
 - You write tests. You never change the code under test, not even to add a stub.
-- If the issue changes behaviour that an existing test pins, rewrite that test to the new behaviour: that rewrite is your failing test. Change only what the issue's own words require, never delete a test case, and name the test you rewrote in your hand-back. The proof flags every rewritten assertion for the Reviewer.
+- If the issue changes behaviour that an existing test pins, rewrite that test to the new behaviour: that rewrite is your failing test. Change only what the issue's own words require, never delete a test case, and name the test you rewrote in your hand-back. The proof flags every changed line of an existing test for the Reviewer.
 - No skip, xfail, only or todo markers. No sleeping, no network, no reliance on test order.
 - Put issue text into files, never onto a command line.
 - Do not read or write anything the Team Rules fence. Do not push.

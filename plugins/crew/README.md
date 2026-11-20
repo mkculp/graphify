@@ -73,15 +73,15 @@ Depth is spent where it changes the outcome: understanding the issue and attacki
 |---|---|
 | `crew baseline` | The setup, suite and check commands pass on a clean checkout of the untouched base. If they do not, only an issue registered to fix the baseline may start. |
 | `crew seal` | The proving test fails on the base plus the test files alone, and not because of a timeout or an unrunnable command. |
-| `crew prove` | On a fresh checkout of the issue's head, made outside the repository so nothing resolves upward into it: the proving test passes and actually ran tests, the full suite and every extra check pass, the sealed test is byte-identical to what was sealed, nothing is uncommitted, no fenced path or file outside the lane was touched, no test was deleted, skipped or removed, and no existing assertion was rewritten outside the sealed files. |
+| `crew prove` | On a fresh checkout of the issue's head, made outside the repository so nothing resolves upward into it: the proving test passes and actually ran tests, the full suite and every extra check pass, the sealed test is byte-identical to what was sealed, nothing is uncommitted, no fenced path or file outside the lane was touched, no test was deleted, skipped or removed, and no line of an existing test was changed outside the sealed files. |
 | `crew review` | The approval carries a summary, a risk level, a rollback and a "why this could break", and explains any new dependency. It applies only to the commit that was proven. |
 | `crew land` | For single-branch delivery: the issue's commits apply to the delivery branch on a scratch checkout, and every landed proving test and the full suite pass there. The branch moves only if they do. |
-| `crew waves` | Which issues are safe to build in parallel, from lane overlap and from `graphify affected`. With a PR per issue, a coupled issue is built on top of the one it is coupled with, so the two PRs do not conflict. |
+| `crew waves` | Which issues are safe to build in parallel, from lane overlap and from `graphify affected`. With a PR per issue, a coupled issue is built on top of the one it is coupled with, so the two PRs do not conflict. Parking, blocking or unparking an issue re-plans this. |
 | `crew pr-body`, `crew brief` | Rendered from the recorded evidence, so the output before and after is quoted, not recalled. |
 
 A PreToolUse hook (`guard.py`) stops rule-breaking early while a run is active: secrets are not read, fenced paths and sealed tests are not written, the Lead writes no project files, builders stay in their lane, and nothing is force-pushed or published. The hook is prevention and is heuristic for shell commands; `crew prove` reads the real diff and is the authority. The hook does nothing in a project with no active run.
 
-Only the Breaker may change what a test expects. When an issue changes behaviour that an existing test pins, the Breaker rewrites that test before sealing, the proof flags every rewritten assertion, and the Reviewer must tie each one to the issue's own words. A Builder who edits an existing assertion to get green is rejected.
+Only the Breaker may change what a test expects. When an issue changes behaviour that an existing test pins, the Breaker rewrites that test before sealing, the proof flags every changed line of it, and the Reviewer must tie each change to the issue's own words. A Builder who edits an existing test to get green is rejected.
 
 Three things are left to judgement, and each has a role assigned to it: whether the proving test fails for the issue's own reason (Breaker, checked by the Prover), whether the fix is right rather than merely green (Reviewer), and whether the spec says what you meant (you, at the go gate).
 
@@ -108,9 +108,9 @@ The Lead is the largest cost, because every request it makes re-reads its whole 
 
 ## How it was tested
 
-- 196 tests drive the real scripts against real temporary git repositories, including the cheating cases: a weakened or deleted test, a fix left uncommitted, an edit outside the lane, a fenced path, a "green" run that executed no tests, two issues that are each green alone and red together.
+- 202 tests drive the real scripts against real temporary git repositories, including the cheating cases: a weakened or deleted test, a rewritten expectation, a fix left uncommitted, an edit outside the lane, a fenced path, a "green" run that executed no tests, two issues that are each green alone and red together.
 - A mutation pass disabled each gate and guard rule in turn and confirmed the suite fails for every one.
-- End-to-end runs loaded the plugin into a nested Claude Code session (`claude -p --plugin-dir`) on a small sample project with seeded bugs, a secret file and a migrations folder. See the pull request that added this plugin for the measured results.
+- Three end-to-end runs loaded the plugin into a nested Claude Code session (`claude -p --plugin-dir`) on a small sample project with seeded bugs, a secret file and a migrations folder: once with three plain bugs on a single branch, and twice with a bug, an issue needing a fenced path, an issue too vague to test, and an issue that contradicts an existing test. Each run found a fault that is now fixed and tested. See the pull request that added this plugin for the measured results.
 
 ## Development
 

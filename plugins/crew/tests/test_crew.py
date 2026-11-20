@@ -747,15 +747,18 @@ def test_evidence_tails_carry_no_machine_paths(project):
 def test_pr_body_names_the_commits_that_actually_landed(project):
     project.set_rules(delivery={"mode": "single-branch", "branch": "main"})
     project.ok("rules")
-    before = git(project.root, "rev-parse", "main")
     _approved(project, "a", "alpha")
+    _approved(project, "b", "beta")
     project.ok("land", "a")
-    landed = git(project.root, "rev-list", "--reverse", "--abbrev-commit", f"{before}..main").split()
-    assert len(landed) == 2
+    after_a = git(project.root, "rev-parse", "main")
+    project.ok("land", "b")
+    landed_b = git(project.root, "rev-list", "--reverse", "--abbrev-commit", f"{after_a}..main").split()
+    assert len(landed_b) == 2, "the proving test commit and the fix commit"
     body = project.ok("pr-body", "--all")
-    assert "**Commits on main:** " + " ".join(f"`{sha}`" for sha in landed) + " (revert these to roll back)" in body
-    branch_head = git(project.root, "rev-parse", "--short", project.issue("a")["branch"])
-    assert branch_head not in landed, "cherry-picked commits have new ids, which is why the body lists them"
+    assert "**Commits on main:** " + " ".join(f"`{sha}`" for sha in landed_b) + " (revert these to roll back)" in body
+    assert body.count("**Commits on main:** ") == 2
+    branch_head = git(project.root, "rev-parse", "--short", project.issue("b")["branch"])
+    assert branch_head not in landed_b, "b was re-created on top of a, so its ids differ from the reviewed branch"
 
 
 # ------------------------------------------------ isolation and red baselines
@@ -830,16 +833,55 @@ def test_init_explains_a_repository_without_commits(tmp_path):
 
 # -------------------------------------------- who may change what tests expect
 
-@pytest.mark.parametrize("line,is_assertion", [
-    ("        self.assertEqual(a, b)", True), ("    assert total == 3", True), ("  expect(sum(1, 2)).toBe(3);", True),
-    ("    assert_eq!(a, b);", True), ("\trequire.Equal(t, 1, got)", True), ("\tt.Fatalf(\"got %d\", n)", True),
-    ("  EXPECT_EQ(a, b);", True), ("    Assert.AreEqual(1, n);", True), ("    result.should eq(3)", True),
-    ("    with pytest.raises(ValueError):", True), ("        with self.assertRaises(ValueError):", True),
-    ("const cart = require('./cart');", False), ("# this should never happen", False),
-    ("import unittest", False), ("    cart = Cart()", False), ("    verify_ssl = False", False),
+@pytest.mark.parametrize("line,trivial", [
+    ("", True), ("    ", True), ("    # a comment", True), ("  // a comment", True), ("import unittest", True),
+    ("from shop.inventory import Inventory", True), ("const cart = require('./cart');", True),
+    ("use super::*;", True), ("#include <gtest/gtest.h>", True), ("    }", True), ("  });", True),
+    ("        self.assertEqual(a, b)", False), ("            Cart().add('pen', 150, quantity=0)", False),
+    ("    def test_rejects_zero_quantity(self):", False), ("  expect(sum(1, 2)).toBe(3);", False),
+    ("    cart = Cart()", False), ("\tt.Fatalf(\"got %d\", n)", False),
 ])
-def test_assertion_lines_are_recognised_without_matching_imports_or_prose(line, is_assertion):
-    assert bool(crew._ASSERT_RE.search(line)) is is_assertion
+def test_only_blank_comment_and_import_lines_are_free_to_remove(line, trivial):
+    assert bool(crew._TRIVIAL_RE.match(line)) is trivial
+
+
+def test_a_rewrite_that_keeps_the_assert_line_is_still_a_rewrite(project):
+    """Seen in a live run: `with assertRaises(...)` stayed, the statement under it changed."""
+    root_test = project.root / "tests" / "test_calc.py"
+    pinned = root_test.read_text() + "\n    def test_div_zero(self):\n        with self.assertRaises(ZeroDivisionError):\n            div(1, 0)\n"
+    root_test.write_text(pinned)
+    commit_all(project.root, "an existing test that pins the old behaviour")
+    project.set_rules(delivery={"base": "main"})
+    project.ok("rules")
+    wt = project.add_issue("1", title="zero divisor returns None; a negative divisor raises")
+    test_calc = wt / "tests" / "test_calc.py"
+
+    test_calc.write_text(pinned.replace("            div(1, 0)\n", "            div(1, -1)\n")
+                         + "\n    def test_div_zero_is_none(self):\n        self.assertIsNone(div(1, 0))\n")
+    commit_all(wt, "test: rewrite what the pinned test expects")
+    cmd = f'"{sys.executable}" -m unittest tests.test_calc -q'
+    project.ok("seal", "1", "--cmd", cmd, "--test-file", "tests/test_calc.py")
+    (wt / "calc.py").write_text(
+        "def add(a, b):\n    return a + b\n\n\ndef div(a, b):\n    if b == 0:\n        return None\n"
+        "    if b < 0:\n        raise ZeroDivisionError(\"negative divisor\")\n    return a / b\n")
+    commit_all(wt, "fix")
+    proc, gates = _proof(project)
+    assert proc.returncode == 0, proc.stdout
+    assert gates["assertions"]["status"] == "warn" and "tests/test_calc.py (1)" in gates["assertions"]["detail"], \
+        "one line changed and it was not an assert line, yet the test now checks something else"
+
+
+def test_a_builder_may_extend_an_import_in_an_existing_test_file(project):
+    wt = project.add_issue("1")
+    project.break_div()
+    project.fix_div()
+    test_calc = wt / "tests" / "test_calc.py"
+    test_calc.write_text(test_calc.read_text().replace("import unittest\n", "import math\nimport unittest\n").replace(
+        "from calc import add, div", "from calc import add, div  # noqa\n# extra coverage below")
+        + "\n    def test_add_floats(self):\n        self.assertTrue(math.isclose(add(0.1, 0.2), 0.3))\n")
+    commit_all(wt, "builder adds a test that needs a new import")
+    proc, gates = _proof(project)
+    assert proc.returncode == 0 and gates["tests-rewritten"]["status"] == "pass", gates["tests-rewritten"]
 
 
 def test_a_builder_may_add_tests_but_not_rewrite_an_existing_assertion(project):
@@ -970,3 +1012,47 @@ def test_single_branch_baseline_fix_lifts_the_halt_when_it_lands(project):
     project.approve("0")
     project.ok("land", "0")
     assert "halt" not in project.state["run"]
+
+
+def test_parking_an_issue_re_plans_what_the_others_are_built_on(project):
+    """An issue stacked on one that gets parked must not be left waiting for it."""
+    _queue(project, "a", ["calc.py"])
+    _queue(project, "b", ["calc.py"])
+    _queue(project, "c", ["calc.py"])
+    project.ok("waves")
+    assert [project.issue(i)["on"] for i in "abc"] == ["", "a", "b"]
+    out = project.ok("park", "b", "--question", "what should b do?")
+    assert "re-planned: issue c is now built on top of a" in out
+    assert project.issue("c")["on"] == "a"
+    out = project.ok("block", "a", "--reason", "declined by the user")
+    assert "re-planned: issue c is now built from the base" in out
+    assert project.issue("c")["on"] == ""
+    project.ok("start", "c")
+    out = project.ok("unpark", "b", "--answer", "do it")
+    assert project.issue("b")["on"] == "c", "the issue already under way keeps the earlier wave"
+    assert project.issue("c")["wave"] < project.issue("b")["wave"]
+
+
+def test_a_queued_issue_is_stacked_on_coupled_work_that_is_already_approved(project):
+    _approved(project, "a", "alpha", owns=["alpha.py"])
+    _queue(project, "b", ["alpha.py"])
+    _queue(project, "c", ["unrelated.py"])
+    out = project.ok("waves")
+    assert project.issue("b")["on"] == "a", out
+    assert project.issue("c")["on"] == ""
+    assert "a (approved)" in out
+    project.ok("start", "b")
+    assert (project.wt("b") / "alpha.py").exists()
+
+
+def test_an_explicit_stack_is_never_re_planned_away(project):
+    _queue(project, "a", ["calc.py"])
+    spec = project.root / ".crew" / "sb.md"
+    spec.write_text("b\n")
+    project.ok("add", "b", "--title", "b", "--spec-file", str(spec), "--owns", "other.py", "--on", "a")
+    project.ok("waves")
+    assert project.issue("b")["on"] == "a" and project.issue("a")["wave"] != project.issue("b")["wave"]
+    project.ok("park", "a", "--question", "?")
+    assert project.issue("b")["on"] == "a"
+    proc = project.crew("start", "b")
+    assert proc.returncode == 2 and "which is parked" in proc.stderr and "crew waves" in proc.stderr

@@ -89,11 +89,13 @@ _TESTDEF_RE = re.compile(
     r"(^\s*(async\s+)?def\s+test\w*\s*\(|\b(it|test)\s*(\.each\b.*)?\(\s*['\"`]|^\s*func\s+Test\w*\s*\("
     r"|@Test\b|#\[(tokio::)?test\b|^\s*(it|specify|scenario)\s+['\"]|\[(Fact|Theory|Test|TestMethod)\b)"
 )
-# A line that makes an assertion, across common test frameworks. Deliberately
-# narrower than "mentions assert": `require('x')` and prose are not assertions.
-_ASSERT_RE = re.compile(
-    r"(\bassert\w*[\s!(.]|\bexpect\s*\(|\.should\b|\bshould\.\w|\brequire\.\w+\(|\bt\.(Error|Fatal|Fail)\w*\("
-    r"|\b(EXPECT|ASSERT)_\w+\(|\bAssert\.\w+\(|\bverify\w*\s*\(|\braises\s*\()"
+# Removed lines that do not change what a test checks: blanks, comments, imports.
+# Anything else removed from an existing test file is a change to an existing
+# test. (Matching only "assert" lines misses a rewrite that keeps the assert
+# line and changes the statement under it.)
+_TRIVIAL_RE = re.compile(
+    r"^\s*($|#|//|/\*|\*/?|--|import\b|from\b.+\bimport\b|(const|let|var)\b.+\brequire\(|require\b|use\b|using\b|#include\b"
+    r"|package\b|[\])}]+[,;]?\s*$)"
 )
 # Runner output that means a command exited 0 without running a single test.
 _NO_TESTS_RE = re.compile(
@@ -868,6 +870,7 @@ def cmd_add(args: argparse.Namespace) -> int:
             "status": "queued",
             "owns": [norm_rel(o) for o in (args.owns or [])],
             "on": args.on or "",
+            "on_explicit": bool(args.on),
             "fixes_baseline": bool(args.fixes_baseline),
             "rejections": [],
             "waivers": [],
@@ -894,6 +897,9 @@ def cmd_start(args: argparse.Namespace) -> int:
         raise CrewError("HALT: " + state["run"]["halt"] + ". Only an issue added with --fixes-baseline may start.")
     if issue.get("on") and rules["delivery"]["mode"] == "pr-per-issue":
         dep = issue_of(state, issue["on"])
+        if dep["status"] in ("parked", "blocked"):
+            raise CrewError(f"issue {args.id} builds on issue {issue['on']}, which is {dep['status']}. "
+                            "Run `crew waves` to re-plan what it is built on.")
         if dep["status"] not in ("approved", "pr"):
             raise CrewError(f"issue {args.id} builds on issue {issue['on']}, which is {dep['status']}. "
                             "Start it once that issue is approved, so it is cut from finished work.")
@@ -1076,18 +1082,18 @@ def static_gates(ctx: Ctx, rules: dict[str, Any], issue: dict[str, Any], head: s
         lost = sum(1 for line in removed if _TESTDEF_RE.search(line)) - sum(1 for line in added if _TESTDEF_RE.search(line))
         if lost > 0:
             removed_tests.append(f"{path} (-{lost})")
-        gone = sum(1 for line in removed if _ASSERT_RE.search(line))
+        gone = sum(1 for line in removed if not _TRIVIAL_RE.match(line))
         if gone:
             (sealed_asserts if path in sealed else rewritten).append(f"{path} ({gone})")
     gate("tests-deleted", not deleted, "no test file deleted" if not deleted else "test files deleted: " + ", ".join(deleted))
     gate("tests-skipped", not skips, "no skip/only/xfail marker added" if not skips else "tests disabled or narrowed: " + "; ".join(skips[:6]))
     gate("tests-removed", not removed_tests, "no test case removed" if not removed_tests else "test cases removed: " + ", ".join(removed_tests))
-    gate("tests-rewritten", not rewritten, "no existing assertion changed outside the proving files" if not rewritten
-         else "existing assertions removed or rewritten outside the sealed proving files: " + ", ".join(rewritten)
-         + ". Only the Breaker changes what tests expect: hand back, unseal, and let the Breaker rewrite them")
-    gate("assertions", not sealed_asserts, "no existing assertion rewritten in the proving files" if not sealed_asserts
-         else "existing assertions removed or rewritten in the proving files (the Reviewer must tie each to the issue's own words): "
-         + ", ".join(sealed_asserts), warn=True)
+    gate("tests-rewritten", not rewritten, "no existing test code changed outside the proving files" if not rewritten
+         else "existing test code removed or rewritten outside the sealed proving files (file and line count): "
+         + ", ".join(rewritten) + ". Only the Breaker changes what tests expect: hand back, unseal, and let the Breaker rewrite them")
+    gate("assertions", not sealed_asserts, "no existing test code rewritten in the proving files" if not sealed_asserts
+         else "existing test code removed or rewritten in the proving files (the Reviewer must tie each change to the "
+         "issue's own words): " + ", ".join(sealed_asserts), warn=True)
 
     configs = [c["path"] for c in changed if matches_any(c["path"], TEST_CONFIGS)]
     gate("test-config", not configs, "test configuration untouched" if not configs
@@ -1521,6 +1527,7 @@ def cmd_park(args: argparse.Namespace) -> int:
 
     mutate(ctx.sd, apply)
     print(f"issue {args.id} parked with one question for the user")
+    replan(ctx)
     return 0
 
 
@@ -1539,6 +1546,7 @@ def cmd_unpark(args: argparse.Namespace) -> int:
 
     back = mutate(ctx.sd, apply)
     print(f"issue {args.id} resumed at {back}")
+    replan(ctx)
     return 0
 
 
@@ -1553,6 +1561,7 @@ def cmd_block(args: argparse.Namespace) -> int:
 
     mutate(ctx.sd, apply)
     print(f"issue {args.id} blocked: {args.reason}")
+    replan(ctx)
     return 0
 
 
@@ -1922,12 +1931,15 @@ def affected_files(root: Path, binary: str, target: str, depth: int = 1) -> set[
     return found
 
 
-def cmd_waves(args: argparse.Namespace) -> int:
-    """Group open issues into waves that are safe to build in parallel."""
-    ctx = Ctx()
+def plan_waves(ctx: Ctx) -> dict[str, Any]:
+    """Group issues into waves that are safe to build in parallel, and decide
+    what each queued issue is built on. Recomputed from scratch on every call,
+    so parking or blocking an issue never leaves another one waiting on it."""
     state, rules = ctx.state, ctx.rules
+    per_issue_prs = rules["delivery"]["mode"] == "pr-per-issue"
+    live = ("queued", "started", "red") + (("proven", "approved", "pr") if per_issue_prs else ())
+    issues = [i for i in state["issues"].values() if i["status"] in live]
     tracked = _git(["ls-files"], ctx.root).splitlines()
-    issues = [i for i in state["issues"].values() if i["status"] in ("queued", "started", "red")]
     binary = graphify_bin() if (ctx.root / "graphify-out" / "graph.json").exists() else None
     owned: dict[str, set[str]] = {}
     reach: dict[str, set[str]] = {}
@@ -1954,51 +1966,73 @@ def cmd_waves(args: argparse.Namespace) -> int:
             elif owned[a["id"]] & reach[b["id"]] or owned[b["id"]] & reach[a["id"]]:
                 hit = sorted((owned[a["id"]] & reach[b["id"]]) | (owned[b["id"]] & reach[a["id"]]))
                 why = "graph: one lane depends on the other via " + ", ".join(hit[:3])
-            if a.get("on") == b["id"] or b.get("on") == a["id"]:
-                why = "stacked: one is built on the other"
+            for one, other in ((a, b), (b, a)):
+                if one.get("on_explicit") and one.get("on") == other["id"]:
+                    why = "stacked: one is built on the other"
             if why:
                 conflicts[a["id"]][b["id"]] = why
                 conflicts[b["id"]][a["id"]] = why
     cap = rules["limits"]["max_builders"]
     waves: list[list[str]] = []
-    for issue in sorted(issues, key=lambda i: (-len(conflicts[i["id"]]), i["id"])):
+    # Issues already under way keep the early waves; queued ones are placed after them.
+    for issue in sorted(issues, key=lambda i: (i["status"] == "queued", -len(conflicts[i["id"]]), i["id"])):
         for wave in waves:
             if len(wave) < cap and not any(other in conflicts[issue["id"]] for other in wave):
                 wave.append(issue["id"])
                 break
         else:
             waves.append([issue["id"]])
+    wave_of = {issue_id: index for index, wave in enumerate(waves, 1) for issue_id in wave}
 
-    # In pr-per-issue delivery two coupled issues cut from the same base produce
-    # PRs that conflict, so the later one is built on top of the earlier one.
+    # With a PR per issue, two coupled issues cut from the same base produce PRs
+    # that conflict, so a queued issue is built on top of the latest coupled one.
     stacks: dict[str, str] = {}
-    if rules["delivery"]["mode"] == "pr-per-issue":
-        wave_of = {issue_id: index for index, wave in enumerate(waves, 1) for issue_id in wave}
-        for issue in issues:
-            earlier = [other for other in conflicts[issue["id"]] if wave_of[other] < wave_of[issue["id"]]]
-            if earlier and not issue.get("on") and issue["status"] == "queued":
-                stacks[issue["id"]] = max(earlier, key=lambda other: (wave_of[other], other))
+    for issue in issues:
+        if issue["status"] != "queued" or issue.get("on_explicit"):
+            continue
+        earlier = [other for other in conflicts[issue["id"]] if wave_of[other] < wave_of[issue["id"]]]
+        stacks[issue["id"]] = max(earlier, key=lambda other: (wave_of[other], other)) if earlier and per_issue_prs else ""
 
     def apply(st: dict[str, Any]) -> None:
-        for index, wave in enumerate(waves, 1):
-            for issue_id in wave:
-                st["issues"][issue_id]["wave"] = index
+        for issue_id, index in wave_of.items():
+            st["issues"][issue_id]["wave"] = index
         for issue_id, dep in stacks.items():
             st["issues"][issue_id]["on"] = dep
 
     mutate(ctx.sd, apply)
+    return {"waves": waves, "conflicts": conflicts, "stacks": {k: v for k, v in stacks.items() if v},
+            "graph": bool(binary), "cap": cap, "status": {i["id"]: i["status"] for i in issues}}
+
+
+def replan(ctx: Ctx) -> None:
+    """Re-plan after an issue leaves or rejoins the queue, and say what moved."""
+    before = {key: issue.get("on", "") for key, issue in ctx.state["issues"].items()}
+    plan = plan_waves(ctx)
+    after = {key: issue.get("on", "") for key, issue in ctx.state["issues"].items()}
+    for key in sorted(after):
+        if after[key] != before.get(key, ""):
+            print(f"re-planned: issue {key} is now built " + (f"on top of {after[key]}" if after[key] else "from the base"))
+    print("waves: " + "; ".join(f"{index}: {', '.join(wave)}" for index, wave in enumerate(plan["waves"], 1)))
+
+
+def cmd_waves(args: argparse.Namespace) -> int:
+    """Group open issues into waves that are safe to build in parallel."""
+    ctx = Ctx()
+    plan = plan_waves(ctx)
     print("WAVES (issues in one wave can be built in parallel, at most "
-          f"{cap} builders; coupling from " + ("the graph and lanes" if binary else "lanes only, no graph") + ")")
-    for index, wave in enumerate(waves, 1):
-        print(f"  wave {index}: {', '.join(wave)}")
-    for a in sorted(conflicts):
-        for b, why in sorted(conflicts[a].items()):
+          f"{plan['cap']} builders; coupling from " + ("the graph and lanes" if plan["graph"] else "lanes only, no graph") + ")")
+    for index, wave in enumerate(plan["waves"], 1):
+        print(f"  wave {index}: " + ", ".join(
+            issue_id + ("" if plan["status"][issue_id] in ("queued", "started", "red") else f" ({plan['status'][issue_id]})")
+            for issue_id in wave))
+    for a in sorted(plan["conflicts"]):
+        for b, why in sorted(plan["conflicts"][a].items()):
             if a < b:
                 print(f"  {a} x {b}: {why}")
-    for issue_id, dep in sorted(stacks.items()):
+    for issue_id, dep in sorted(plan["stacks"].items()):
         print(f"  {issue_id} is built on top of {dep}: its branch is cut from {dep}'s once {dep} is approved, "
               "and its PR is merged after it")
-    if not issues:
+    if not plan["waves"]:
         print("  (no open issues)")
     return 0
 

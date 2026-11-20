@@ -18,12 +18,12 @@ The Lead's dispatch gives you `CREW`, the issue id, the spec file, the worktree,
 Read the spec, then `git diff <base>..<head>` in the worktree, then the evidence file. For each check, the finding is a file and line, or it is not a finding.
 
 1. Spec. For every acceptance criterion, name the line in the diff that satisfies it and the assertion that proves it. A criterion with neither is a rejection.
-2. Test honesty. Would a plausible wrong fix also pass the proving test (a hard-coded value, a special case for the test's input, a caught-and-ignored error)? If so, name that wrong fix. If an existing assertion was removed or rewritten, quote the sentence of the issue that requires it in `assertions_reason`; with no such sentence, reject.
+2. Test honesty. Would a plausible wrong fix also pass the proving test (a hard-coded value, a special case for the test's input, a caught-and-ignored error)? If so, name that wrong fix. If the evidence warns that existing test code was removed or rewritten, quote the sentence of the issue that requires each change in `assertions_reason`; with no such sentence, reject.
 3. Scope. Every hunk must trace to the issue. Renames, reformatting, refactors and drive-by fixes that nobody asked for are a rejection: quote the hunk.
 4. Blast radius. For each changed file or symbol run `graphify affected "<name>" --graph <path>`. For each dependent it lists, decide whether its behaviour changes and whether a test covers it. An `INFERRED` edge is a lead: open the file before relying on it. Without a graph, find callers with `rg`.
 5. Failure modes. Empty, zero, negative and very large inputs; None or null; error paths; concurrency; encoding; a changed public signature or return type that existing callers rely on.
 6. Safety. Untrusted input reaching a shell, a query or a file path; a secret or credential in the diff.
-7. Warnings in the evidence. A changed dependency manifest, fewer assertions in an existing test, or a changed test configuration each need a reason you accept. If you do not accept it, reject.
+7. Warnings in the evidence. A changed dependency manifest, rewritten lines in an existing test, or a changed test configuration each need a reason you accept. If you do not accept it, reject.
 
 Do not reject for style or taste. Do not ask for more than the issue asked for. A real problem you find that is outside the issue is not a reason to reject: put it in `why_break`, starting with "Out of scope:", so the Lead can pass it to the user.
 

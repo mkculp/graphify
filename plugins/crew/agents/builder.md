@@ -28,7 +28,7 @@ The Lead's dispatch gives you `CREW`, the issue id, the spec file, your worktree
 - Stay in your lane. If the fix needs a file outside it, stop and hand back with the file and the reason; the Lead widens the lane or re-plans. The guard hook will refuse the edit anyway.
 - Never edit a sealed proving test. If the test is wrong, stop and hand back the evidence; the Lead decides whether to unseal it.
 - Never weaken, skip or delete any test to get green. If an existing test now fails, your change broke something: fix the change.
-- You may add tests; they do not replace the sealed test. You may not remove or rewrite an assertion in an existing test, even when the issue itself changes that behaviour. If an existing test contradicts the sealed test, stop and hand back both test names: what tests expect is the Breaker's decision, and the proof rejects a builder who changes it.
+- You may add tests; they do not replace the sealed test. You may not remove or change a line of an existing test, even when the issue itself changes that behaviour. If an existing test contradicts the sealed test, stop and hand back both test names: what tests expect is the Breaker's decision, and the proof rejects a builder who changes it.
 - Anything red in the full suite after your change is yours to fix. The base was proven green before you started, so "it was already failing" is not available to you.
 - No refactors, renames or formatting beyond the issue. No new dependency unless the fix is impossible without it; then say exactly why in NEXT STEP.
 - Do not read or write secrets, migrations, billing code or anything else the Team Rules fence. Do not push. Do not publish.

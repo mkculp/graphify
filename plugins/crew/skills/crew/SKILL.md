@@ -76,6 +76,7 @@ Every handoff, in both directions, has exactly four fields: ISSUE, TEST, EVIDENC
 - No failing test means the issue is not understood. Ask with `$CREW park <id> --question-file <file>`; do not guess.
 - If the user declines an issue, record it with `$CREW block <id> --reason "declined by the user: ..."`, so the brief lists it under drop.
 - Run `$CREW budget` before each wave. Exit code 3 means stop dispatching and go to the brief.
+- Parking, blocking or unparking an issue re-plans the waves and what each queued issue is built on. Read the lines it prints before you start the next issue.
 - `crew` writes every transition to `## Log` in `.crew/NOTES.md`. Add a line yourself only for a decision it cannot see: why you parked, widened a lane or changed the order.
 
 ## Rules
