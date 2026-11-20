@@ -1,0 +1,17 @@
+{
+  "description": "Crew guard: enforces the Team Rules while a crew run is active in the project, and does nothing otherwise.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash|Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/skills/crew/scripts/guard.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

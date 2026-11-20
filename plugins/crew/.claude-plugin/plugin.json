@@ -1,0 +1,19 @@
+{
+  "name": "crew",
+  "version": "0.1.0",
+  "description": "A proof-first engineering crew: a Lead plus Mapper, Breaker, Builders, Prover and Reviewer take a repository from issues to merge-ready pull requests. Every change needs a test that failed first, a green full suite on a clean checkout and a reviewed diff, all checked by a machine. Maps the repository with a graphify code graph and reports measured token cost.",
+  "author": {
+    "name": "mkculp"
+  },
+  "repository": "https://github.com/mkculp/graphify",
+  "license": "Apache-2.0",
+  "keywords": [
+    "agents",
+    "testing",
+    "tdd",
+    "code-review",
+    "pull-requests",
+    "graphify",
+    "cost"
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "name": "mkculp",
+  "owner": {
+    "name": "mkculp"
+  },
+  "description": "Community plugins built on graphify. Not affiliated with or endorsed by Graphify Labs.",
+  "plugins": [
+    {
+      "name": "crew",
+      "source": "./plugins/crew",
+      "description": "A proof-first engineering crew that takes a repository from issues to merge-ready pull requests, with a machine-checked failing test before every change."
+    }
+  ]
+}

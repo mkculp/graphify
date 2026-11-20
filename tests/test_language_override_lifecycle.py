@@ -1,7 +1,9 @@
 """Language declarations must invalidate incremental state and reach watch events."""
 import hashlib
 import json
+import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -137,8 +139,15 @@ def drive_watch(root, monkeypatch, actions, *, observed_roots=None):
         return original_rebuild(path, **kwargs)
 
     steps = iter(actions)
+    real_sleep = time.sleep
+    watch_loop = watch_mod.watch.__code__
 
     def pump(_seconds):
+        # ``time.sleep`` is replaced process-wide below, and subprocess polls a
+        # timed wait with it. Only the watch loop's own sleep drives the script;
+        # any other caller (a rebuild's ``git rev-parse``) gets a real sleep.
+        if sys._getframe(1).f_code is not watch_loop:
+            return real_sleep(_seconds)
         try:
             event = next(steps)()
         except StopIteration:
@@ -182,6 +191,35 @@ def test_watch_declared_code_updates_graph_on_observer_thread(tmp_path, monkeypa
     drive_watch(tmp_path, monkeypatch, [change])
     assert "watched()" in graph_labels(tmp_path)
     assert not (tmp_path / "graphify-out" / "needs_update").exists()
+
+
+def test_drive_watch_ignores_sleeps_made_inside_a_rebuild(tmp_path, monkeypatch):
+    """A sleep made during a rebuild must not advance the scripted steps.
+
+    `drive_watch` replaces the process-wide ``time.sleep``. A rebuild calls
+    ``git rev-parse HEAD`` with a timeout, and ``subprocess`` polls a timed wait
+    with ``time.sleep`` whenever the child has not exited yet. That poll used to
+    run the next step, or raise the closing KeyboardInterrupt, in the middle of
+    the rebuild, so these tests failed whenever git was slower than the first
+    poll. This reproduces that poll deterministically.
+    """
+    events = pytest.importorskip("watchdog.events")
+    (tmp_path / ".graphifyrc").write_text("language.tpl=php\n")
+    source = tmp_path / "page.tpl"
+    real_git_head = watch_mod._git_head
+
+    def git_head_that_polls(cwd=None):
+        time.sleep(0)
+        return real_git_head(cwd=cwd)
+
+    monkeypatch.setattr(watch_mod, "_git_head", git_head_that_polls)
+
+    def change():
+        source.write_text("<?php function watched() {}\n")
+        return events.FileModifiedEvent(str(source))
+
+    drive_watch(tmp_path, monkeypatch, [change])
+    assert "watched()" in graph_labels(tmp_path)
 
 
 def test_watch_document_override_marks_semantic_work_instead_of_rebuilding(tmp_path, monkeypatch):
