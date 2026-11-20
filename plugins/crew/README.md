@@ -110,7 +110,7 @@ The Lead is the largest cost, because every request it makes re-reads its whole 
 
 - 202 tests drive the real scripts against real temporary git repositories, including the cheating cases: a weakened or deleted test, a rewritten expectation, a fix left uncommitted, an edit outside the lane, a fenced path, a "green" run that executed no tests, two issues that are each green alone and red together.
 - A mutation pass disabled each gate and guard rule in turn and confirmed the suite fails for every one.
-- Three end-to-end runs loaded the plugin into a nested Claude Code session (`claude -p --plugin-dir`) on a small sample project with seeded bugs, a secret file and a migrations folder: once with three plain bugs on a single branch, and twice with a bug, an issue needing a fenced path, an issue too vague to test, and an issue that contradicts an existing test. Each run found a fault that is now fixed and tested. See the pull request that added this plugin for the measured results.
+- Four end-to-end runs loaded the plugin into a nested Claude Code session (`claude -p --plugin-dir`) on a small sample project with seeded bugs, a secret file and a migrations folder: one with three plain bugs on a single branch; two with a bug, an issue needing a fenced path, an issue too vague to test, and an issue that contradicts an existing test; and one where a rejection was injected the moment an issue was proven. The first three each found faults that are now fixed and tested; the fourth, on the final code, found none. See the pull request that added this plugin for the measured results.
 
 ## Development
 
